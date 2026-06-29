@@ -1,0 +1,98 @@
+--- QUERY 1 ---
+Un arco unisce due clienti se hanno acquistato brani dello stesso album.
+Il peso è il numero di album in comune che hanno acquistato.
+
+WITH CustomerAlbums AS (
+    SELECT DISTINCT i.CustomerId, t.AlbumId
+    FROM InvoiceLine il
+    JOIN Invoice i ON il.InvoiceId = i.InvoiceId
+    JOIN Track t   ON il.TrackId = t.TrackId
+)
+SELECT ca1.CustomerId AS id1, ca2.CustomerId AS id2, COUNT(ca1.AlbumId) AS weight
+FROM CustomerAlbums ca1
+JOIN CustomerAlbums ca2 ON ca1.AlbumId = ca2.AlbumId
+WHERE ca1.CustomerId < ca2.CustomerId
+GROUP BY ca1.CustomerId, ca2.CustomerId
+ORDER BY weight DESC;
+
+--- QUERY 2 ---
+Un arco unisce due generi se compaiono all'interno della stessa Playlist.
+Il peso indica quante volte brani di quei due generi coabitano nelle stesse playlist.
+
+WITH PlaylistGenres AS (
+    SELECT DISTINCT pt.PlaylistId, t.GenreId
+    FROM PlaylistTrack pt
+    JOIN Track t ON pt.TrackId = t.TrackId
+)
+SELECT pg1.GenreId AS id1, pg2.GenreId AS id2, COUNT(pg1.PlaylistId) AS weight
+FROM PlaylistGenres pg1
+JOIN PlaylistGenres pg2 ON pg1.PlaylistId = pg2.PlaylistId
+WHERE pg1.GenreId < pg2.GenreId
+GROUP BY pg1.GenreId, pg2.GenreId
+ORDER BY weight DESC;
+
+--- QUERY 3 ---
+Un arco unisce due artisti se i loro brani sono stati inclusi nella
+stessa fattura (Invoice), indicando che un cliente li ha acquistati insieme.
+Il peso è il numero di fatture in comune.
+WITH InvoiceArtists AS (
+    SELECT DISTINCT il.InvoiceId, al.ArtistId
+    FROM InvoiceLine il
+    JOIN Track t ON il.TrackId = t.TrackId
+    JOIN Album al ON t.AlbumId = al.AlbumId
+)
+SELECT ia1.ArtistId AS id1, ia2.ArtistId AS id2, COUNT(ia1.InvoiceId) AS weight
+FROM InvoiceArtists ia1
+JOIN InvoiceArtists ia2 ON ia1.InvoiceId = ia2.InvoiceId
+WHERE ia1.ArtistId < ia2.ArtistId
+GROUP BY ia1.ArtistId, ia2.ArtistId
+ORDER BY weight DESC;
+
+--- QUERY 4 (LEFT JOIN) ---
+Grafo in cui i nodi sono i Clienti e gli archi collegano clienti che hanno acquistato
+lo stesso album. Usiamo la LEFT JOIN partendo dall'anagrafica clienti, così se un cliente
+non ha mai fatto acquisti (o non ha album in comune con nessuno), apparirà comunque nel
+grafo come nodo isolato.
+
+WITH CustomerAlbums AS (
+    -- Associa ogni cliente agli album che ha acquistato
+    SELECT DISTINCT i.CustomerId, t.AlbumId
+    FROM InvoiceLine il
+    JOIN Invoice i ON il.InvoiceId = i.InvoiceId
+    JOIN Track t   ON il.TrackId = t.TrackId
+)
+SELECT c.CustomerId AS id1, ca2.CustomerId AS id2, -- Sarà NULL se il cliente non condivide album con nessuno
+    COUNT(ca2.AlbumId) AS weight
+FROM Customer c
+-- Trova gli album comprati dal primo cliente
+LEFT JOIN CustomerAlbums ca1 ON c.CustomerId = ca1.CustomerId
+-- Collega al secondo cliente tramite gli stessi album
+LEFT JOIN CustomerAlbums ca2 ON ca1.AlbumId = ca2.AlbumId
+                            AND ca1.CustomerId < ca2.CustomerId
+GROUP BY c.CustomerId, ca2.CustomerId
+ORDER BY weight DESC;
+
+--- QUERY 5 (JOIN LEFT) ---
+I vertici sono tutti gli impiegati (Employee) presenti nel database.
+Esiste un arco tra l'impiegato A e l'impiegato B se esiste un legame gerarchico diretto tra loro,
+ovvero sfruttando l'anello ReportsTo (A riporta a B, oppure B riporta ad A).
+Il verso dell'arco va da A verso B se il fatturato totale (somma della colonna Total in Invoice per
+i clienti associati all'impiegato tramite SupportRepId) generato da A nel Paese selezionato è maggiore
+del fatturato generato da B. In caso in cui A e B abbiano lo stesso fatturato, aggiungere due archi in
+entrambi i versi.
+Il peso dell'arco tra l'impiegato A e l'impiegato B è calcolato come la somma dei rispettivi fatturati
+nel Paese selezionato.
+
+WITH fatturato AS (
+    SELECT e.EmployeeId, e.ReportsTo, COALESCE(SUM(i.Total), 0) AS fatturato_totale
+    FROM employee e
+    LEFT JOIN customer c ON c.SupportRepId = e.EmployeeId
+    LEFT JOIN invoice i ON i.CustomerId = c.CustomerId
+    AND i.BillingCountry = %s
+    GROUP BY e.EmployeeId, e.ReportsTo
+    )
+SELECT f.EmployeeId  AS id1,f2.EmployeeId AS id2,(f.fatturato_totale + f2.fatturato_totale) AS peso
+FROM fatturato f
+JOIN fatturato f2 ON (f.ReportsTo = f2.EmployeeId OR f.EmployeeId = f2.ReportsTo) -doppia condizione-
+WHERE f.fatturato_totale >= f2.fatturato_totale
+
